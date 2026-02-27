@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,13 @@ import (
 const (
 	defaultSystemPrompt = "You are the primary coordinator for an AI agent team. Provide concise, accurate answers and explain when you call tools or delegate work to specialist sub-agents."
 	defaultToolCacheTTL = 30 * time.Second
+)
+
+var (
+	roleUserRe      = regexp.MustCompile(`(?mi)^(?:User|User\s*\(quoted\))\s*:`)
+	roleSystemRe    = regexp.MustCompile(`(?mi)^(?:System|System\s*\(quoted\))\s*:`)
+	roleAssistantRe = regexp.MustCompile(`(?mi)^(?:Assistant|Assistant\s*\(quoted\))\s*:`)
+	roleMemoryRe    = regexp.MustCompile(`(?mi)^Conversation memory`)
 )
 
 // Agent orchestrates model calls, memory, tools, and sub-agents.
@@ -50,6 +58,8 @@ type Agent struct {
 	Shared    *memory.SharedSession
 	CodeMode  *codemode.CodeModeUTCP
 	CodeChain *chain.UtcpChainClient
+
+	AllowUnsafeTools bool
 }
 
 // Options configure a new Agent.
@@ -66,6 +76,7 @@ type Options struct {
 	CodeMode          *codemode.CodeModeUTCP
 	Shared            *memory.SharedSession
 	CodeChain         *chain.UtcpChainClient
+	AllowUnsafeTools  bool
 }
 
 // New creates an Agent with the provided options.
@@ -134,6 +145,7 @@ func New(opts Options) (*Agent, error) {
 		Shared:            opts.Shared,
 		CodeMode:          opts.CodeMode,
 		CodeChain:         opts.CodeChain,
+		AllowUnsafeTools:  opts.AllowUnsafeTools,
 	}
 
 	return a, nil
@@ -458,16 +470,19 @@ func (a *Agent) renderMemory(records []memory.MemoryRecord) string {
 
 func escapePromptContent(s string) string {
 	s = strings.ReplaceAll(s, "`", "'")
-	s = strings.ReplaceAll(s, "\nUser:", "\nUser (quoted):")
-	s = strings.ReplaceAll(s, "\nSystem:", "\nSystem (quoted):")
+	s = roleUserRe.ReplaceAllString(s, "User (quoted):")
+	s = roleSystemRe.ReplaceAllString(s, "System (quoted):")
+	s = roleAssistantRe.ReplaceAllString(s, "Assistant (quoted):")
+	s = roleMemoryRe.ReplaceAllString(s, "Conversation memory (quoted):")
 	return s
 }
 
 func sanitizeInput(s string) string {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "\nUser:", "\nUser (quoted):")
-	s = strings.ReplaceAll(s, "\nSystem:", "\nSystem (quoted):")
-	s = strings.ReplaceAll(s, "\nConversation memory", "\nConversation memory (quoted)")
+	s = roleUserRe.ReplaceAllString(s, "User (quoted):")
+	s = roleSystemRe.ReplaceAllString(s, "System (quoted):")
+	s = roleAssistantRe.ReplaceAllString(s, "Assistant (quoted):")
+	s = roleMemoryRe.ReplaceAllString(s, "Conversation memory (quoted):")
 	return s
 }
 
@@ -530,11 +545,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 			if real, ok := normalize(payload.Tool); ok {
 				return real, payload.Arguments, ok
 			}
-			// Fallback: if UTCP client exists, accept raw tool name
-			if a.UTCPClient != nil {
-				return payload.Tool, payload.Arguments, true
-			}
-
 			return "", nil, false
 		}
 	}
@@ -555,10 +565,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 			if real, ok := normalize(tool); ok {
 				return real, args, ok
 			}
-			// Fallback for UTCP client
-			if a.UTCPClient != nil {
-				return tool, args, true
-			}
 			return "", nil, false
 		}
 	}
@@ -575,10 +581,6 @@ func (a *Agent) detectDirectToolCall(s string) (string, map[string]any, bool) {
 		if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
 			if real, ok := normalize(tool); ok {
 				return real, args, ok
-			}
-			// Fallback for UTCP client
-			if a.UTCPClient != nil {
-				return tool, args, true
 			}
 			return "", nil, false
 		}
@@ -1436,9 +1438,6 @@ func (a *Agent) toolOrchestrator(
 	sessionID string,
 	userInput string,
 ) (bool, string, error) {
-	if strings.Contains(userInput, `"tool_name": "codemode.run_code"`) {
-		return false, "", nil
-	}
 
 	// FAST PATH: Skip LLM call for obvious non-tool queries
 	// This saves 1-3 seconds per request!
@@ -1527,6 +1526,12 @@ Return ONLY JSON. No explanations.
 	}
 	if strings.TrimSpace(tc.ToolName) == "" {
 		return false, "", nil
+	}
+
+	if tc.ToolName == "codemode.run_code" {
+		if !a.AllowUnsafeTools {
+			return true, "", fmt.Errorf("unauthorized tool execution: %s is restricted", tc.ToolName)
+		}
 	}
 
 	// Handle codemode.run_code specially

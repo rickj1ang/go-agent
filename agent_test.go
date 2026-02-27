@@ -594,9 +594,10 @@ func TestCodeMode_ExecutesCallToolInsideDSL(t *testing.T) {
 	utcpClient := &stubUTCPClient{}
 
 	agent, err := New(Options{
-		Model:    model,
-		Memory:   mem,
-		CodeMode: codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -646,10 +647,11 @@ func TestCodeMode_ExecutesCallToolStreamInsideDSL(t *testing.T) {
 	utcpClient.fakeStream = stream
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -706,10 +708,11 @@ func TestCodeMode_StoresToonMemory(t *testing.T) {
 	utcpClient := &stubUTCPClient{}
 
 	agent, _ := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 
 	_, _ = agent.Generate(ctx, "sess", "run code")
@@ -747,10 +750,11 @@ func TestCodeMode_ComplexLogicAndToolChain(t *testing.T) {
 	utcpClient := &stubUTCPClient{}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -831,7 +835,11 @@ func TestDirectJsonToolInvocationCallsUTCP(t *testing.T) {
 	ctx := context.Background()
 	model := &stubModel{response: "ignored"}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
-	utcp := &stubUTCPClient{}
+	utcp := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "echo", Description: "echo test"},
+		},
+	}
 
 	agent, _ := New(Options{
 		Model:      model,
@@ -858,7 +866,11 @@ func TestDSLToolInvocationCallsUTCP(t *testing.T) {
 	ctx := context.Background()
 	model := &stubModel{response: "ignored"}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
-	utcp := &stubUTCPClient{}
+	utcp := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "echo", Description: "echo test"},
+		},
+	}
 
 	agent, _ := New(Options{
 		Model:      model,
@@ -883,7 +895,11 @@ func TestShorthandInvocationCallsUTCP(t *testing.T) {
 	ctx := context.Background()
 	model := &stubModel{}
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 0)
-	utcp := &stubUTCPClient{}
+	utcp := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "echo", Description: "echo test"},
+		},
+	}
 
 	agent, _ := New(Options{
 		Model:      model,
@@ -909,7 +925,12 @@ func TestDirectJsonStreamInvocationCallsUTCPStream(t *testing.T) {
 	stream := &FakeStream{
 		chunks: []any{"chunk1", nil},
 	}
-	utcp := &stubUTCPClient{fakeStream: stream}
+	utcp := &stubUTCPClient{
+		fakeStream: stream,
+		searchTools: []utcpTools.Tool{
+			{Name: "stream.echo", Description: "stream echo"},
+		},
+	}
 
 	agent, _ := New(Options{
 		Model:      model,
@@ -983,11 +1004,12 @@ func TestToolSpecsMergesAllSources(t *testing.T) {
 	local := &stubTool{spec: ToolSpec{Name: "local.echo"}}
 
 	agent, _ := New(Options{
-		Model:      model,
-		Memory:     mem,
-		Tools:      []Tool{local},
-		UTCPClient: utcp,
-		CodeMode:   codemode.NewCodeModeUTCP(utcp, model),
+		Model:            model,
+		Memory:           mem,
+		Tools:            []Tool{local},
+		UTCPClient:       utcp,
+		CodeMode:         codemode.NewCodeModeUTCP(utcp, model),
+		AllowUnsafeTools: true,
 	})
 
 	tools := agent.ToolSpecs()
@@ -1024,10 +1046,11 @@ func TestCodeMode_SimpleExpression(t *testing.T) {
 	utcp := &stubUTCPClient{}
 
 	agent, _ := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcp,
-		CodeMode:   codemode.NewCodeModeUTCP(utcp, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcp,
+		CodeMode:         codemode.NewCodeModeUTCP(utcp, model),
+		AllowUnsafeTools: true,
 	})
 
 	out, err := agent.Generate(ctx, "sess", "run code")
@@ -1067,10 +1090,11 @@ func TestCodeModeOrchestrator_NoToolsNeeded(t *testing.T) {
 	}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1120,10 +1144,11 @@ func TestCodeModeOrchestrator_ToolsNeededButNoneSelected(t *testing.T) {
 	}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1174,10 +1199,11 @@ func TestCodeModeOrchestrator_SnippetGenerationError(t *testing.T) {
 	}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1226,10 +1252,11 @@ func TestCodeModeOrchestrator_SnippetExecutionSuccess(t *testing.T) {
 	}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1275,10 +1302,11 @@ func TestCodeMode_ExecutesCallToolInsideDSL2(t *testing.T) {
 	utcpClient := &stubUTCPClient{}
 
 	agent, err := New(Options{
-		Model:      model,
-		Memory:     mem,
-		UTCPClient: utcpClient,
-		CodeMode:   codemode.NewCodeModeUTCP(utcpClient, model),
+		Model:            model,
+		Memory:           mem,
+		UTCPClient:       utcpClient,
+		CodeMode:         codemode.NewCodeModeUTCP(utcpClient, model),
+		AllowUnsafeTools: true,
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)

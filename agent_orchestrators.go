@@ -167,6 +167,11 @@ Analyze the request and respond with ONLY the JSON object:`, userInput, toolDesc
 	// ----------------------------------------------------------
 	steps := make([]chain.ChainStep, len(parsed.Steps))
 	for i, s := range parsed.Steps {
+		if s.ToolName == "codemode.run_code" {
+			if !a.AllowUnsafeTools {
+				return false, "", fmt.Errorf("unauthorized tool execution: %s is restricted", s.ToolName)
+			}
+		}
 		steps[i] = chain.ChainStep{
 			ToolName:    s.ToolName,
 			Inputs:      s.Inputs,
