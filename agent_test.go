@@ -799,7 +799,7 @@ func TestGenerate_ExecutesUTCPCalledTool(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 
-	out, err := agent.Generate(ctx, "s1", "hello")
+	out, err := agent.Generate(ctx, "s1", "echo something")
 	if err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}

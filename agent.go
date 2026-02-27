@@ -1150,6 +1150,23 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 		return "", errors.New("user input is empty")
 	}
 
+	// -------------------------------------------------------------
+	// PREFETCH: Start context retrieval and tool discovery in parallel
+	// -------------------------------------------------------------
+	var (
+		prefetchWG sync.WaitGroup
+		records    []memory.MemoryRecord
+	)
+
+	prefetchWG.Add(1)
+	go func() {
+		defer prefetchWG.Done()
+		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
+	}()
+
+	// ToolSpecs discovery is internally cached and thread-safe.
+	_ = a.ToolSpecs()
+
 	// ---------------------------------------------
 	// 0. DIRECT TOOL INVOCATION (bypass everything)
 	// ---------------------------------------------
@@ -1202,7 +1219,8 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// ---------------------------------------------
 	// 4. TOOL ORCHESTRATOR (normal UTCP tools)
 	// ---------------------------------------------
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
+	prefetchWG.Wait() // Ensure memory is ready for orchestrator
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
 		if err != nil {
 			return "", err
 		}
@@ -1225,14 +1243,24 @@ func (a *Agent) Generate(ctx context.Context, sessionID, userInput string) (any,
 	// ---------------------------------------------
 	// 6. LLM COMPLETION
 	// ---------------------------------------------
-	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
-	if err != nil {
-		return "", err
-	}
+	// Build LLM prompt without tools/subagents:
+	var sb strings.Builder
+	sb.Grow(4096)
+
+	sb.WriteString(a.systemPrompt)
+	sb.WriteString("\n\nConversation memory (TOON):\n")
+	sb.WriteString(a.renderMemory(records))
+
+	sb.WriteString("\n\nUser: ")
+	sb.WriteString(sanitizeInput(userInput))
+	sb.WriteString("\n\n")
+
+	prompt := sb.String()
 
 	files, _ := a.RetrieveAttachmentFiles(ctx, sessionID, a.contextLimit)
 
 	var completion any
+	var err error
 	if len(files) > 0 {
 		completion, err = a.model.GenerateWithFiles(ctx, prompt, files)
 	} else {
@@ -1429,6 +1457,7 @@ type ToolChoice struct {
 	ToolName  string         `json:"tool_name"`
 	Arguments map[string]any `json:"arguments"`
 	Reason    string         `json:"reason"`
+	Answer    string         `json:"answer"` // Added for one-turn resolution
 }
 
 // In the toolOrchestrator function, modify the JSON parsing section:
@@ -1437,6 +1466,7 @@ func (a *Agent) toolOrchestrator(
 	ctx context.Context,
 	sessionID string,
 	userInput string,
+	records []memory.MemoryRecord,
 ) (bool, string, error) {
 
 	// FAST PATH: Skip LLM call for obvious non-tool queries
@@ -1476,31 +1506,40 @@ func (a *Agent) toolOrchestrator(
 		})
 	}
 
-	// Build tool selection prompt
+	// Build tool selection prompt with memory context
 	toolDesc := a.cachedToolPrompt(toolList)
+	memoryDesc := a.renderMemory(records)
 
 	choicePrompt := fmt.Sprintf(`
-You are a UTCP tool selection engine.
+You are a UTCP tool selection and planning engine.
 
-A user asked:
+USER REQUEST:
 %q
 
-You have access to these UTCP tools:
+CONVERSATION MEMORY:
 %s
 
-Think step-by-step whether ANY tool should be used.
+AVAILABLE UTCP TOOLS:
+%s
 
-Return ONLY a JSON object EXACTLY like this:
+OBJECTIVE:
+Analyze if the user's request requires calling a tool or if it can be answered directly using conversational memory.
 
+RULES:
+1. If a tool is needed, set "use_tool": true and provide "tool_name" and "arguments".
+2. If NO tool is needed, set "use_tool": false and provide the final answer in "answer".
+3. Use only the exact tool names provided.
+
+Return ONLY a JSON object:
 {
   "use_tool": true|false,
   "tool_name": "name or empty",
   "arguments": { },
-  "stream": true|false
+  "answer": "Complete final answer if no tool is used",
+  "reason": "Short explanation"
 }
 
-Return ONLY JSON. No explanations.
-`, userInput, toolDesc)
+Return ONLY JSON.`, userInput, memoryDesc, toolDesc)
 
 	// Query LLM
 	raw, err := a.model.Generate(ctx, choicePrompt)
@@ -1522,6 +1561,10 @@ Return ONLY JSON. No explanations.
 	}
 
 	if !tc.UseTool {
+		if tc.Answer != "" {
+			a.storeMemory(sessionID, "assistant", tc.Answer, nil)
+			return true, tc.Answer, nil
+		}
 		return false, "", nil
 	}
 	if strings.TrimSpace(tc.ToolName) == "" {
@@ -1689,16 +1732,25 @@ func extractJSON(response string) string {
 // This AVOIDS expensive LLM calls for obvious non-tool queries.
 // EXTREMELY CONSERVATIVE: only filters pure informational questions.
 func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
-	// ONLY filter out EXPLICIT pure informational questions
-	// Examples: "what is X?", "explain Y", "why does Z"
+	// 0. Skip for very short inputs or greetings
+	if len(lowerInput) < 2 {
+		return false
+	}
+	greetings := []string{"hello", "hi", "hey", "good morning", "good afternoon", "thanks", "thank you"}
+	for _, g := range greetings {
+		if lowerInput == g || strings.HasPrefix(lowerInput, g+" ") || strings.HasPrefix(lowerInput, g+",") {
+			return false
+		}
+	}
 
-	// Check for pure question patterns WITHOUT any action words
+	// 1. Check for pure informational question patterns WITHOUT any action words
 	pureQuestionStarters := []string{
 		"what is ", "what are ", "what does ", "what's ",
 		"why is ", "why are ", "why does ", "why do ",
 		"who is ", "who are ", "who was ",
 		"when is ", "when was ", "when did ",
 		"where is ", "where are ", "where was ",
+		"how is ", "how are ", "how does ",
 		"explain ", "describe ", "define ",
 		"tell me about ", "tell me what ",
 	}
@@ -1711,7 +1763,9 @@ func (a *Agent) likelyNeedsToolCall(lowerInput string) bool {
 				strings.Contains(lowerInput, " get") ||
 				strings.Contains(lowerInput, " list") ||
 				strings.Contains(lowerInput, " show") ||
-				strings.Contains(lowerInput, " files")
+				strings.Contains(lowerInput, " files") ||
+				strings.Contains(lowerInput, " run") ||
+				strings.Contains(lowerInput, " exec")
 
 			if !hasActionWord {
 				// Pure informational question - skip tool orchestration

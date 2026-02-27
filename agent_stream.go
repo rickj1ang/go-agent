@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
+	"github.com/Protocol-Lattice/go-agent/src/memory"
 	"github.com/Protocol-Lattice/go-agent/src/models"
 )
 
@@ -16,6 +18,23 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	if trimmed == "" {
 		return nil, errors.New("user input is empty")
 	}
+
+	// -------------------------------------------------------------
+	// PREFETCH: Start context retrieval and tool discovery in parallel
+	// -------------------------------------------------------------
+	var (
+		prefetchWG sync.WaitGroup
+		records    []memory.MemoryRecord
+	)
+
+	prefetchWG.Add(1)
+	go func() {
+		defer prefetchWG.Done()
+		records, _ = a.retrieveContext(ctx, sessionID, userInput, a.contextLimit)
+	}()
+
+	// ToolSpecs discovery is internally cached and thread-safe.
+	_ = a.ToolSpecs()
 
 	// Helper to wrap immediate result in a stream
 	immediateStream := func(val any, err error) (<-chan models.StreamChunk, error) {
@@ -58,7 +77,8 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	}
 
 	// 4. TOOL ORCHESTRATOR
-	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput); handled {
+	prefetchWG.Wait()
+	if handled, output, err := a.toolOrchestrator(ctx, sessionID, userInput, records); handled {
 		return immediateStream(output, err)
 	}
 
@@ -71,13 +91,17 @@ func (a *Agent) GenerateStream(ctx context.Context, sessionID, userInput string)
 	}
 
 	// 6. LLM COMPLETION (Streaming)
-	prompt, err := a.buildPrompt(ctx, sessionID, userInput)
-	if err != nil {
-		return nil, err
-	}
+	// Build prompt manually to use pre-fetched records
+	var sb strings.Builder
+	sb.Grow(4096)
+	sb.WriteString(a.systemPrompt)
+	sb.WriteString("\n\nConversation memory (TOON):\n")
+	sb.WriteString(a.renderMemory(records))
+	sb.WriteString("\n\nUser: ")
+	sb.WriteString(sanitizeInput(userInput))
+	sb.WriteString("\n\n")
 
-	// Note: Currently GenerateStream does not support file attachments for streaming.
-	// We proceed with text-only streaming.
+	prompt := sb.String()
 
 	stream, err := a.model.GenerateStream(ctx, prompt)
 	if err != nil {
