@@ -1350,12 +1350,17 @@ func TestChainOrchestrator_ParsesToolNameAndInputs(t *testing.T) {
 	}
 
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
-	utcp := &stubUTCPClient{}
+	utcp := &stubUTCPClient{
+		searchTools: []utcpTools.Tool{
+			{Name: "echo"},
+		},
+	}
 
 	agent, _ := New(Options{
-		Model:     model,
-		Memory:    mem,
-		CodeChain: chain.NewChainModeUTCP(utcp),
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+		CodeChain:  chain.NewChainModeUTCP(utcp),
 	})
 
 	_, err := agent.Generate(ctx, "sess", "run")
@@ -1372,7 +1377,12 @@ func TestChainOrchestrator_ParsesStreamFlag(t *testing.T) {
 	ctx := context.Background()
 
 	stream := &FakeStream{chunks: []any{"A", "B", nil}}
-	utcp := &stubUTCPClientV2{fakeStream: stream}
+	utcp := &stubUTCPClientV2{
+		fakeStream: stream,
+		searchTools: []utcpTools.Tool{
+			{Name: "stream.echo"},
+		},
+	}
 
 	model := &stubModel{
 		response: `{
@@ -1391,9 +1401,10 @@ func TestChainOrchestrator_ParsesStreamFlag(t *testing.T) {
 	mem := memory.NewSessionMemory(&memory.MemoryBank{}, 4)
 
 	agent, _ := New(Options{
-		Model:     model,
-		Memory:    mem,
-		CodeChain: chain.NewChainModeUTCP(utcp),
+		Model:      model,
+		Memory:     mem,
+		UTCPClient: utcp,
+		CodeChain:  chain.NewChainModeUTCP(utcp),
 	})
 
 	_, err := agent.Generate(ctx, "sess3", "run")

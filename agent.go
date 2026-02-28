@@ -1600,6 +1600,18 @@ Return ONLY JSON.`, userInput, memoryDesc, toolDesc)
 		}
 	}
 
+	// Validate tool exists
+	exists := false
+	for _, t := range toolList {
+		if t.Name == tc.ToolName {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
+	}
+
 	// Handle codemode.run_code specially
 	if tc.ToolName == "codemode.run_code" && a.CodeMode != nil {
 		code, _ := tc.Arguments["code"].(string)
@@ -1629,18 +1641,6 @@ Return ONLY JSON.`, userInput, memoryDesc, toolDesc)
 		})
 
 		return true, rawOut, nil
-	}
-
-	// Validate tool exists
-	exists := false
-	for _, t := range toolList {
-		if t.Name == tc.ToolName {
-			exists = true
-			break
-		}
-	}
-	if !exists {
-		return true, "", fmt.Errorf("UTCP tool unknown: %s", tc.ToolName)
 	}
 
 	// Execute UTCP or local tool

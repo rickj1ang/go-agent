@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alpkeskin/gotoon"
 	"github.com/universal-tool-calling-protocol/go-utcp/src/plugins/chain"
+	"github.com/universal-tool-calling-protocol/go-utcp/src/tools"
 )
 
 // codeChainOrchestrator lets the LLM decide whether to execute a multi-step UTCP chain.
@@ -24,10 +26,43 @@ func (a *Agent) codeChainOrchestrator(
 		return false, "", nil
 	}
 
+	// FAST PATH: Skip LLM call for obvious non-tool queries
+	// This saves 1-3 seconds per request!
+	lowerInput := strings.ToLower(strings.TrimSpace(userInput))
+	if !a.likelyNeedsToolCall(lowerInput) {
+		return false, "", nil
+	}
+
 	// ----------------------------------------------------------
 	// 1. Build chain-selection prompt (LLM chain planning engine)
 	// ----------------------------------------------------------
 	toolList := a.ToolSpecs()
+	if len(toolList) == 0 {
+		return false, "", nil
+	}
+
+	// Add codemode.run_code as a discoverable tool if CodeMode is enabled
+	if a.CodeMode != nil {
+		toolList = append(toolList, tools.Tool{
+			Name:        "codemode.run_code",
+			Description: "Execute Go code with access to UTCP tools via CallTool() and CallToolStream()",
+			Inputs: tools.ToolInputOutputSchema{
+				Type: "object",
+				Properties: map[string]any{
+					"code": map[string]any{
+						"type":        "string",
+						"description": "Go code to execute",
+					},
+					"timeout": map[string]any{
+						"type":        "integer",
+						"description": "Timeout in milliseconds",
+					},
+				},
+				Required: []string{"code"},
+			},
+		})
+	}
+
 	toolDesc := a.cachedToolPrompt(toolList)
 
 	choicePrompt := fmt.Sprintf(`You are a UTCP Chain Planning Engine that constructs multi-step tool execution plans.
@@ -167,6 +202,18 @@ Analyze the request and respond with ONLY the JSON object:`, userInput, toolDesc
 	// ----------------------------------------------------------
 	steps := make([]chain.ChainStep, len(parsed.Steps))
 	for i, s := range parsed.Steps {
+		// Validating tool existence
+		exists := false
+		for _, t := range toolList {
+			if t.Name == s.ToolName {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			return false, "", fmt.Errorf("UTCP tool unknown in chain: %s", s.ToolName)
+		}
+
 		if s.ToolName == "codemode.run_code" {
 			if !a.AllowUnsafeTools {
 				return false, "", fmt.Errorf("unauthorized tool execution: %s is restricted", s.ToolName)
