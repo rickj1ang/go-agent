@@ -63,7 +63,7 @@ func main() {
 			modules.NewModelModule("model", func(_ context.Context) (models.Agent, error) {
 				return orchestratorModel, nil
 			}),
-			modules.InMemoryMemoryModule(10000, memory.AutoEmbedder(), &memOpts),
+			FileBackedMemoryModule("agent_memory.json", 10000, memory.AutoEmbedder(), &memOpts),
 		),
 		adk.WithCodeModeUtcp(client, orchestratorModel),
 	)
