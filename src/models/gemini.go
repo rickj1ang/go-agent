@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	genai "github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
+	"google.golang.org/genai"
 )
 
 type GeminiLLM struct {
@@ -18,14 +16,7 @@ type GeminiLLM struct {
 }
 
 func NewGeminiLLM(ctx context.Context, model string, promptPrefix string) (Agent, error) {
-	key := os.Getenv("GOOGLE_API_KEY")
-	if key == "" {
-		key = os.Getenv("GEMINI_API_KEY")
-	}
-	if key == "" {
-		return nil, errors.New("gemini: missing GOOGLE_API_KEY/GEMINI_API_KEY")
-	}
-	cl, err := genai.NewClient(ctx, option.WithAPIKey(key))
+	cl, err := genai.NewClient(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -33,57 +24,47 @@ func NewGeminiLLM(ctx context.Context, model string, promptPrefix string) (Agent
 }
 
 func (g *GeminiLLM) Generate(ctx context.Context, prompt string) (any, error) {
-	model := g.Client.GenerativeModel(g.Model)
 	full := prompt
 	if g.PromptPrefix != "" {
 		full = g.PromptPrefix + "\n\n" + prompt
 	}
-	resp, err := model.GenerateContent(ctx, genai.Text(full))
+
+	contents := []*genai.Content{genai.NewContentFromText(full, genai.RoleUser)}
+	resp, err := g.Client.Models.GenerateContent(ctx, g.Model, contents, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini generate: %w", err)
 	}
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
+
+	if resp.Text() == "" {
 		return nil, errors.New("gemini: empty response")
 	}
-	return resp.Candidates[0].Content.Parts[0], nil
+	return resp.Text(), nil
 }
 
 // GenerateStream uses Gemini's streaming API to yield tokens incrementally.
 func (g *GeminiLLM) GenerateStream(ctx context.Context, prompt string) (<-chan StreamChunk, error) {
-	model := g.Client.GenerativeModel(g.Model)
 	full := prompt
 	if g.PromptPrefix != "" {
 		full = g.PromptPrefix + "\n\n" + prompt
 	}
-
-	iter := model.GenerateContentStream(ctx, genai.Text(full))
+	contents := []*genai.Content{genai.NewContentFromText(full, genai.RoleUser)}
 
 	ch := make(chan StreamChunk, 16)
 	go func() {
 		defer close(ch)
 		var sb strings.Builder
-		for {
-			resp, err := iter.Next()
+		for resp, err := range g.Client.Models.GenerateContentStream(ctx, g.Model, contents, nil) {
 			if err != nil {
 				// io.EOF signals normal end of stream
 				if err.Error() == "no more items in iterator" || err == context.Canceled {
 					ch <- StreamChunk{Done: true, FullText: sb.String()}
 					return
 				}
-				// Check for iterator exhaustion via the google iterator sentinel
 				ch <- StreamChunk{Done: true, FullText: sb.String(), Err: err}
 				return
 			}
-			if resp == nil || len(resp.Candidates) == 0 {
-				continue
-			}
-			cand := resp.Candidates[0]
-			if cand.Content == nil || len(cand.Content.Parts) == 0 {
-				continue
-			}
-			delta := fmt.Sprint(cand.Content.Parts[0])
-			sb.WriteString(delta)
-			ch <- StreamChunk{Delta: delta}
+			sb.WriteString(resp.Text())
+			ch <- StreamChunk{Delta: resp.Text()}
 		}
 	}()
 
@@ -95,9 +76,6 @@ func (g *GeminiLLM) GenerateStream(ctx context.Context, prompt string) (<-chan S
 // gemini.go (inside package models)
 
 func (g *GeminiLLM) GenerateWithFiles(ctx context.Context, prompt string, files []File) (any, error) {
-	model := g.Client.GenerativeModel(g.Model)
-
-	// Build normalized copies (never pass raw f.MIME to Gemini)
 	norm := make([]File, 0, len(files))
 	for _, f := range files {
 		normalizedMIME := normalizeMIME(f.Name, f.MIME)
@@ -108,42 +86,29 @@ func (g *GeminiLLM) GenerateWithFiles(ctx context.Context, prompt string, files 
 		})
 	}
 
-	// Text context always present
 	text := combinePromptWithFiles(prompt, norm)
 
-	var parts []genai.Part
+	var parts []*genai.Part
 	if p := strings.TrimSpace(g.PromptPrefix); p != "" {
-		parts = append(parts, genai.Text(p))
+		parts = append(parts, genai.NewPartFromText(p))
 	}
-	parts = append(parts, genai.Text(text))
+	parts = append(parts, genai.NewPartFromText(text))
 
-	// Attach only if MIME is sanitized for Gemini
 	for _, f := range norm {
 		if len(f.Data) == 0 {
 			continue
 		}
 		sanitized := sanitizeForGemini(f.MIME)
-
 		if sanitized == "" {
-			continue // skip unsupported/unknown
+			continue
 		}
-
-		if strings.HasPrefix(sanitized, "image/") {
-			// ImageData expects just the format (e.g., "png") not "image/png"
-			// The SDK prepends "image/" automatically
-			format := strings.TrimPrefix(sanitized, "image/")
-			parts = append(parts, genai.ImageData(format, f.Data))
-		} else if strings.HasPrefix(sanitized, "video/") {
-			parts = append(parts, genai.Blob{MIMEType: sanitized, Data: f.Data})
-		}
+		parts = append(parts, genai.NewPartFromBytes(f.Data, sanitized))
 	}
 
-	resp, err := model.GenerateContent(ctx, parts...)
+	contents := []*genai.Content{genai.NewContentFromParts(parts, genai.RoleUser)}
+	resp, err := g.Client.Models.GenerateContent(ctx, g.Model, contents, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini generateWithFiles: %w", err)
 	}
-	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, errors.New("gemini: empty response")
-	}
-	return resp.Candidates[0].Content.Parts[0], nil
+	return resp.Text(), nil
 }

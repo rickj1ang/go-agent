@@ -14,10 +14,11 @@ require (
 	github.com/universal-tool-calling-protocol/go-utcp v1.10.5
 	go.mongodb.org/mongo-driver v1.13.1
 	google.golang.org/api v0.252.0
+	google.golang.org/genai v1.54.0
 )
 
 require (
-	cloud.google.com/go v0.115.0 // indirect
+	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/ai v0.8.0 // indirect
 	cloud.google.com/go/auth v0.17.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
@@ -29,6 +30,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
