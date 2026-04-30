@@ -172,15 +172,32 @@ lattice-agent/
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `GOOGLE_API_KEY` | Gemini API credentials | For Gemini models |
-| `GEMINI_API_KEY` | Alternative to `GOOGLE_API_KEY` | For Gemini models |
+| `GOOGLE_API_KEY` | Gemini API credentials (AI Studio) | For Gemini models (AI Studio) |
+| `GEMINI_API_KEY` | Alternative to `GOOGLE_API_KEY` | For Gemini models (AI Studio) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to Vertex AI service account key JSON | For Gemini via Vertex AI |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID | For Gemini via Vertex AI |
+| `GOOGLE_CLOUD_LOCATION` | Vertex AI location (e.g. `us-central1`) | For Gemini via Vertex AI |
+| `GOOGLE_GENAI_USE_VERTEXAI` | Set to `true` to use Vertex AI instead of AI Studio | For Gemini via Vertex AI |
 | `DATABASE_URL` | PostgreSQL connection string | For persistent memory |
 | `ADK_EMBED_PROVIDER` | Embedding provider override | No (defaults to Gemini) |
 
 ### Example Configuration
 
+#### Using Google AI Studio (API Key)
+
 ```bash
 export GOOGLE_API_KEY="your-api-key-here"
+export DATABASE_URL="postgres://user:pass@localhost:5432/lattice?sslmode=disable"
+export ADK_EMBED_PROVIDER="gemini"
+```
+
+#### Using Vertex AI (Service Account)
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+export GOOGLE_GENAI_USE_VERTEXAI=true
 export DATABASE_URL="postgres://user:pass@localhost:5432/lattice?sslmode=disable"
 export ADK_EMBED_PROVIDER="gemini"
 ```
